@@ -1,0 +1,13 @@
+del /s *.obj
+del /s *.#??
+del /s *.map
+del /s *.pch
+del /s *.tds
+del /s *.cgl
+del /s *.ilf
+del /s *.ilc
+del /s *.ild
+del /s *.ils
+del /s *.iobj
+del /s *.ipdb
+del /s *.pdb
