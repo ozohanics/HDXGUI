@@ -151,8 +151,25 @@ bool TPeptideStore::SearchAPeptide(TRawDataFile* rawData, int pepIdx, int fileId
 	results[pepIdx].ZeroIC(peptides[pepIdx].sequence, fileIdx);
 	this->rawData = rawData;
 
-	double	mz, ppm = DEUTMASSERRORPPM;
+	//check if valid retention times
 	long	start = ERROR_VALUE, end = ERROR_VALUE;
+	try
+	{
+		//set start and end scans
+		start = rawData->GetScanAtTime(peptides[pepIdx].startRT);
+		end = rawData->GetScanAtTime(peptides[pepIdx].endRT);
+	}
+	catch (exception* e)
+	{
+		WRITE_DEBUG(e->what());
+		return false;
+	}
+
+	if (start == -1) start = 1;
+	if (end < start) end = rawData->GetSpecNr();
+
+	double	mz, ppm = DEUTMASSERRORPPM;
+	
 	//~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 	// Check if there is anything to search for
@@ -161,44 +178,20 @@ bool TPeptideStore::SearchAPeptide(TRawDataFile* rawData, int pepIdx, int fileId
 	double*		RTIDX = new double[rawSpecNr];
 	double		maxInt = -1.0;  //maximum intensity in all xEIC
 	size_t		maxIntPos = 0;
-
-	for (long i = 0; i < rawSpecNr; i++)
-	{
-		RT[i] = rawData->GetFileDataRT(i);
-	}
 	
-	//check if valid retention times
-	try
-	{
-		//set start and end scans
-		start = rawData->GetScanAtTime(peptides[pepIdx].startRT);
-		end   = rawData->GetScanAtTime(peptides[pepIdx].endRT);
-	}
-	catch (exception * e)
-	{
-		WRITE_DEBUG(e->what());
-		return false;
-	}
+	const int minIsoToConsider = 0; //calculate the number of isotopes to use minimum
+	int maxPepD = CalcMaxPepDeuteration(pepIdx, minIsoToConsider, isDeuterated);
 
-	if (start == -1) start = 1;
-	if (end < start) end = rawData->GetSpecNr();
-	
-	int maxPepD = peptides[pepIdx].composition.isoDataNr;
-	int minIsoToConsider = 0; //calculate the number of isotopes to use minimum
-
-	for (size_t idx = 0; idx < peptides[pepIdx].composition.isoDataNr; idx++)
-	{
-		if (peptides[pepIdx].composition.isoData[idx]  > MIN_ISOTOPE_ABUNDANCE) minIsoToConsider++;
-		maxPepD = minIsoToConsider;
-	}
-
-	if (isDeuterated) maxPepD = peptides[pepIdx].CalcMaxDeuteration() + minIsoToConsider + 1;
-	
 	//create temp storage for isotopes to be searched maxPepD in number
 	double** tempY = new double* [maxPepD];
 	double* tempMass = new double[maxPepD];
-	
+
 	//fill up with data
+	for (long i = 0; i < rawSpecNr; i++)
+	{
+		RT[i] = rawData->GetFileDataRT(i);
+	}	
+	
 	for (size_t i = 0; i < maxPepD; i++)
 	{
 		//isDeuterated = true;
@@ -224,7 +217,11 @@ bool TPeptideStore::SearchAPeptide(TRawDataFile* rawData, int pepIdx, int fileId
 	//p[0] = new int[5];
 	double sDelta = 0.0; //mass error
 	//search all scans for the calculated isotope masses in tempMass
+	int refIdx = peptides[pepIdx].composition.maxIdx; //ID of the isotope used for reference. 
+	double refPPM = 0.0;
+	int final_ref_isotope_idx = refIdx;
 
+	//It should be the max intensity but not possible for deuterated, as overlap possible
 	for (size_t s = start; s < end; s++)
 	{//check all scans	
 		RTIDX[s] = s;
@@ -241,6 +238,8 @@ bool TPeptideStore::SearchAPeptide(TRawDataFile* rawData, int pepIdx, int fileId
 
 			tempY[idx][s - start] = 0.0;
 			mz = tempMass[idx] / peptides[pepIdx].z + masses::Hp;
+			ppm = 25.0; //check the mass precision;
+			//normally we should get better than 10 ppm
 			sDelta = ppm * mz / 1.0e6;
 			//~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
@@ -253,6 +252,26 @@ bool TPeptideStore::SearchAPeptide(TRawDataFile* rawData, int pepIdx, int fileId
 				intensity = rawData->GetFileDataY(s, found);
 				foundmz = rawData->GetFileDataMZ(s, found);
 				isoCount++;
+				//check mass precision, maybe it is to bad, compared to the others
+				double peak_ppm = fabs((rawData->GetFileDataMZArray(s)[found] - mz) / mz * 1.0e6);
+				const double ppm_upper_limit = 7.5;
+				if ( peak_ppm > ppm_upper_limit)
+				{//if to far, reduce intensity proportionally
+					intensity = intensity / exp(1+(peak_ppm - ppm_upper_limit)/ ppm_upper_limit);
+				}
+				if (idx == refIdx) //calc ppm values for reference
+				{
+					refPPM = fabs(peak_ppm);
+				}
+				else if (idx > refIdx) //if peak is after reference, check if ppm better
+				{
+					if (fabs(peak_ppm) < refPPM)
+					{
+						refPPM = fabs(peak_ppm);
+						final_ref_isotope_idx = idx;
+					}
+				}
+
 				sumInt += intensity;
 				foundCases++;
 				if (intensity > scanMaxInt)
@@ -264,6 +283,7 @@ bool TPeptideStore::SearchAPeptide(TRawDataFile* rawData, int pepIdx, int fileId
 					maxIntVec[idx] = intensity;
 					maxLocVec[idx] = s;
 				}
+				//WRITE_INFO(peptides[pepIdx].sequence + "***" + to_string(s) + "***" + to_string((rawData->GetFileDataMZArray(s)[found]- mz)/mz * 1.0e6)+ "***" + to_string(RT[s]));
 			}
 			//isoInScan[s][idx] = intensity;
 			
@@ -292,100 +312,20 @@ bool TPeptideStore::SearchAPeptide(TRawDataFile* rawData, int pepIdx, int fileId
 	results[pepIdx].ICs[fileIdx].maxScanInt.assign(maxIntVec.begin(), maxIntVec.end());
 	results[pepIdx].ICs[fileIdx].maxScanLoc.assign(maxLocVec.begin(), maxLocVec.end());
 
+	//for (auto v = 0; v < maxIntVec.size(); v++)
+	{//write the data about isotopes for debuging puposes to a debug info.txt		
+		//WRITE_INFO(peptides[pepIdx].sequence + "-" + to_string(v) + "-" + to_string(maxIntVec[v]) + "-" + to_string(maxLocVec[v]) + "-" + to_string(RT[maxLocVec[v]]));
+	}
+
 #if 1
 	if (useXICOverlap) {
 		// if desired, we can detect chroma peaks for all isotopes	
 		//create storage for results
-#include "savgol.h"
-		SavGol* sg = new SavGol;
-
-		struct peakData
-		{
-			double loc[3]; //peak location
-			double y[3]; //peak intensity
-			int size = -1; //number of peaks
-		};
-		vector<peakData> peaks(maxPepD);
-		//create storage for peak param, common
-		double commonRT = 0.0, commonStart = 0.0, commonEnd = 0.0, prevInt = 0.0;
-		//ToDo: current algorithm assumes that the isotope 0 is found and is the target isotope
-		//		and also that the most intense chromatographic peak will be the target
-		double* smoothY = new double[end - start];
-		int pwidth = 0;
-		for (int iso = 0; iso < maxPepD; iso++)
-		{//for all isotopes
-			peaks[iso].size = 0;
-			TPeakDetect tp;
-			sg->DoSmoothWithOutput(tempY[iso], smoothY, end - start, 7, 1);
-			tp.SetData(&RTIDX[start], smoothY, end - start);
-			tp.DetectPeaks();
-			//ToDo: here do something with the detected peaks
-			//tp.WriteData(to_string(pepIdx) +"_" +to_string(fileIdx) + "_" + to_string(iso));
-			int pn = tp.GetPeakNr();
-			peaks[iso].size = min(pn, 3);
-			for (int n = 0; n < peaks[iso].size; ++n)
-			{	//check peak RT						
-				(peaks[iso].loc[n] = tp.GetPeakRT(n));
-
-				(peaks[iso].y[n] = tp.peakMaxInt[n]);
-				pwidth = tp.peakEnd[n] - tp.peakStart[n];
-			}
-		}
-		SAFE_DELETE_ARRAY(smoothY);
-		SAFE_DELETE(sg);
-
-		double rtDelta = pwidth*0.5; //difference that we count as 0
-		// make it dependent on the width of the current chromatographic peak
-		//find the first isotope that is not 0 intensity and find its highest peak???
-		int maxIntLoc = 0; //max intensity location
-		bool foundMax = false;
-		double maxLocalInt = BASELINE;
-		for (int iso = peptides[pepIdx].composition.maxIdx; iso < maxPepD/2.0; iso++)
-		{
-			//int iso = peptides[pepIdx].composition.maxIdx;
-			for (int s = 0; s < peaks[iso].size; s++)
-			{
-				if (peaks[iso].y[s] > maxLocalInt)
-				{
-					maxLocalInt = peaks[iso].y[s];
-					maxIntLoc = (long)peaks[iso].loc[s];
-					foundMax = true;
-				}
-			}
-			if (foundMax) break; //found a good isotope and its location. Use that as a reference
-		}
-
-		//std::cout << start <<"__" << maxIntPos << "__" << maxIntLoc << std::endl;
-
-		for (int iso = maxPepD/2.0-1; iso < maxPepD; iso++)
-		{//for all isotopes
-			//std::cout << iso << "__";
-			bool isoFound = false;
-			for (int s = 0; s < peaks[iso].size; s++)
-			{
-				//std::cout << s << "__";
-				//if such a peak is found for current isotope, then OK, else erase
-				//std::cout << peaks[iso].loc[s] << "__" << peaks[iso].y[s] << std::endl;
-				if (fabs(peaks[iso].loc[s] - maxIntLoc) < rtDelta)
-				{
-					isoFound = true;
-					//std::cout << iso << "___";
-				}
-			}
-			//std::cout << std::endl;
-			if (!isoFound)
-			{
-				for (int p = start; p < end; p++)
-				{
-					tempY[iso][p - start] = 0.0;
-				}
-			}
-			//std::cout << std::endl;
-		}
-		maxIntPos = max(maxIntLoc - (int)start, 0);
+		
+		maxIntPos = CheckIsotopeOverlap(pepIdx, start, end, maxPepD, tempY, RTIDX, maxLocVec[final_ref_isotope_idx]);
 		//this->peptides[pepIdx].			maxIntLoc = maxIntPos + start;
 
-		//WRITE_INFO(maxIntPos+start);
+		//WRITE_INFO(maxLocVec[final_ref_isotope_idx]);
 		//WRITE_INFO(RT[maxIntPos + start]);
 		//std::cout << maxIntPos << std::endl;
 	}
@@ -507,7 +447,7 @@ double TPeptideStore::CreateAverageIsoPattern(int pepIdx, int fileIdx, int sScan
 		for (size_t r = max(0,maxPos - AVGSPECISOTOPENR); r < min(maxPos+ AVGSPECISOTOPENR,eScan) ; r++)
 			//ToDo: create average of spectra
 		{
-			if (Y[0][r] > ISOTOPE_CENTROID_TOP * Y[0][maxPos])
+			if (Y[i][r] > ISOTOPE_CENTROID_TOP * Y[i][maxPos])
 			{
 				//std::cout << Y[i][r] << "\t";
 				resultIsotopeDistrib += Y[i][r];
@@ -778,6 +718,89 @@ void TPeptideStore::WriteDeuterationInMEMHDX()
 		std::cout << std::endl;
 		}
 	}
+}
+
+inline int TPeptideStore::CalcMaxPepDeuteration(int pepIdx, int minIsoToConsider, bool isDeuterated)
+{
+	int maxPepD = peptides[pepIdx].composition.isoDataNr; //maximum number of isotopic peaks to search for
+	for (size_t idx = 0; idx < peptides[pepIdx].composition.isoDataNr; idx++)
+	{
+		if (peptides[pepIdx].composition.isoData[idx] > MIN_ISOTOPE_ABUNDANCE) minIsoToConsider++;
+		maxPepD = minIsoToConsider;
+	}
+
+	if (isDeuterated) maxPepD = peptides[pepIdx].CalcMaxDeuteration() + minIsoToConsider + 1;
+
+	return maxPepD;
+}
+
+//function input parameters:
+///
+inline int TPeptideStore::CheckIsotopeOverlap(int pepIdx, int start, int end, int maxPepD, double** tempY, double* RTIDX, int refIdx) //include reference isotope number
+{//return the position of envelope maximum 
+#include "savgol.h"
+	SavGol* sg = new SavGol;
+
+	struct peakData
+	{
+		double loc[3]; //peak location
+		double y[3]; //peak intensity
+		int size = -1; //number of peaks
+	};
+	vector<peakData> peaks(maxPepD);
+	//create storage for peak param, common
+	double* smoothY = new double[end - start];
+
+	for (int iso = 0; iso < maxPepD; iso++)
+	{//for all isotopes
+		peaks[iso].size = 0;
+		TPeakDetect tp;
+		sg->DoSmoothWithOutput(tempY[iso], smoothY, end - start, 9, 1);
+		tp.SetData(&RTIDX[start], smoothY, end - start);
+		tp.DetectPeaks();
+		//ToDo: here do something with the detected peaks
+		//tp.WriteData(to_string(pepIdx) +"_" +to_string(fileIdx) + "_" + to_string(iso));
+		int pn = tp.GetPeakNr();
+		peaks[iso].size = min(pn, 3);
+		//store data
+		for (int n = 0; n < peaks[iso].size; n++)
+		{	//check peak RT						
+			(peaks[iso].loc[n] = tp.GetPeakRT(n));
+			(peaks[iso].y[n] = tp.peakMaxInt[n]);
+		}
+	}
+	//clean up
+	SAFE_DELETE_ARRAY(smoothY);
+	SAFE_DELETE(sg);
+
+	double rtDelta = 10; //difference that we count as 0
+								   // make it dependent on the width of the current chromatographic peak
+								   //find the first isotope that is not 0 intensity and find its highest peak???
+	//WRITE_INFO(refIdx);
+	//peptides[pepIdx].composition.maxIdx
+	//std::cout << start <<"__" << maxIntLoc << std::endl;
+
+	for (int iso = 0 ; iso < maxPepD; iso++)
+	{//for all isotopes
+		bool isoFound = false;
+		for (int s = 0; s < peaks[iso].size; s++)
+		{
+			if (fabs(peaks[iso].loc[s] - refIdx) < rtDelta)
+			{
+				isoFound = true;
+				break;
+			}
+		}
+		if (!isoFound)
+		{
+			//WRITE_INFO(to_string(iso) + "***" + to_string(peaks[iso].loc[0]));
+			for (int p = start; p < end; p++)
+			{
+				tempY[iso][p - start] = 0.0;
+			}
+		}
+	}
+	return  max(refIdx - start, 0);
 }
 
 

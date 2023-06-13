@@ -106,5 +106,8 @@ public:
 	void		WriteDeuterationPercentToStdOut();
 	void		WriteDeuterationCentersToStdOut();
 	void		WriteDeuterationInMEMHDX();
+
+	int			CalcMaxPepDeuteration(int pepIdx, int minIsoToConsider, bool isDeuterated);
+	int 		CheckIsotopeOverlap(int pepIdx, int start, int end, int maxPepD, double** tempY, double* RTIDX, int refIdx);
 };
 
