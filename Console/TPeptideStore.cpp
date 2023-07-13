@@ -179,7 +179,7 @@ bool TPeptideStore::SearchAPeptide(TRawDataFile* rawData, int pepIdx, int fileId
 	double		maxInt = -1.0;  //maximum intensity in all xEIC
 	size_t		maxIntPos = 0;
 	
-	const int minIsoToConsider = 0; //calculate the number of isotopes to use minimum
+	const int minIsoToConsider = 3; //calculate the number of isotopes to use minimum
 	int maxPepD = CalcMaxPepDeuteration(pepIdx, minIsoToConsider, isDeuterated);
 
 	//create temp storage for isotopes to be searched maxPepD in number
@@ -233,12 +233,14 @@ bool TPeptideStore::SearchAPeptide(TRawDataFile* rawData, int pepIdx, int fileId
 		//use max intensity of a spectrum to cut the small peaks
 		double scanMaxInt = 0;
 		
+		TEnvelopeDescriptors peakDesc; //WRITE_INFO("Current scan: " + to_string(RT[s]));
+
 		for (size_t idx = 0; idx < maxPepD; idx++)
 		{// cycle for all isotopes	
 
 			tempY[idx][s - start] = 0.0;
 			mz = tempMass[idx] / peptides[pepIdx].z + masses::Hp;
-			ppm = 25.0; //check the mass precision;
+			//ppm = 25.0; //check the mass precision;
 			//normally we should get better than 10 ppm
 			sDelta = ppm * mz / 1.0e6;
 			//~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -253,11 +255,12 @@ bool TPeptideStore::SearchAPeptide(TRawDataFile* rawData, int pepIdx, int fileId
 				foundmz = rawData->GetFileDataMZ(s, found);
 				isoCount++;
 				//check mass precision, maybe it is to bad, compared to the others
-				double peak_ppm = fabs((rawData->GetFileDataMZArray(s)[found] - mz) / mz * 1.0e6);
-				const double ppm_upper_limit = 7.5;
+				double peak_ppm = fabs((foundmz - mz) / mz * 1.0e6);
+				peakDesc.addDataPoint(foundmz, peak_ppm, intensity);
+				const double ppm_upper_limit = exp_ppm_error;
 				if ( peak_ppm > ppm_upper_limit)
 				{//if to far, reduce intensity proportionally
-					intensity = intensity / exp(1+(peak_ppm - ppm_upper_limit)/ ppm_upper_limit);
+					intensity = intensity / exp(1+(peak_ppm - ppm_upper_limit) / ppm_upper_limit);
 				}
 				if (idx == refIdx) //calc ppm values for reference
 				{
@@ -290,13 +293,13 @@ bool TPeptideStore::SearchAPeptide(TRawDataFile* rawData, int pepIdx, int fileId
 			tempY[idx][s - start] = intensity;
 		}//end isotopes
 
+		//get longest isotope set with smallest error
+		double minPPM = peakDesc.getMinPPMAvg();
+		int maxlen = peakDesc.CalcContiguosRegion(this->exp_ppm_error); //check which isotopes are best described
+
+		//WRITE_INFO(to_string(peakDesc.getPureEnvelopeStart()) + "__" + to_string(peakDesc.getPureEnvelopeEnd()));
 
 
-		for (size_t idx = 0; idx < maxPepD; idx++)
-		{
-			if (tempY[idx][s - start] < scanMaxInt / MAX_DYNAMIC_RANGE) tempY[idx][s - start] = 0.0;
-		}
-		
 		//check if this is the highest spectrum
 		if (sumInt > maxInt && (isoCount >= minIsoToConsider)) //find at least some % of isotopes
 		{
@@ -321,7 +324,7 @@ bool TPeptideStore::SearchAPeptide(TRawDataFile* rawData, int pepIdx, int fileId
 	if (useXICOverlap) {
 		// if desired, we can detect chroma peaks for all isotopes	
 		//create storage for results
-		
+
 		maxIntPos = CheckIsotopeOverlap(pepIdx, start, end, maxPepD, tempY, RTIDX, maxLocVec[final_ref_isotope_idx]);
 		//this->peptides[pepIdx].			maxIntLoc = maxIntPos + start;
 
@@ -384,50 +387,6 @@ void TPeptideStore::WriteResultsToStdOut()
 	}
 }
 
-bool TPeptideStore::CheckCoelution(int pepIdx, int fileIdx)
-{//needs to return bool
-	//calc the max loc and set bad ones to 0
-	auto ret = freopen("dbg.txt", "w", stdout);
-	std::vector<int> v;
-	/*for (int x = 0; x < results[pepIdx].ICs[fileIdx].maxScanLoc.size(); x++)
-	{
-		v.push_back(results[pepIdx].ICs[fileIdx].maxScanLoc[x]);
-	}
-
-	int mElem = v.size() / 2;
-	std::cout << v.size() <<"  " << mElem << "  " << results[pepIdx].ICs[fileIdx].isotopeNr << std::endl;
-	if (v.size() < 2) return false;
-
-	auto m = v.begin() + v.size() / 2;
-	std::nth_element(v.begin(), m, v.end());
-	
-	
-	auto median = v[mElem];
-	//std::cout << "\nThe median is " << v[mElem] << '\n';
-	int prevZero = 0; //number of prev bad ones
-	for (int i = 0; i < results[pepIdx].ICs[fileIdx].isotopeNr; i++)
-	{
-		//set to 0 the bad ones
-		std::cout << results[pepIdx].ICs[fileIdx].intensity[i] << "\t" << results[pepIdx].ICs[fileIdx].maxScanLoc[i] << std::endl;
-		
-		if (results[pepIdx].ICs[fileIdx].maxScanLoc[i] > median + 4 || results[pepIdx].ICs[fileIdx].maxScanLoc[i] < median - 4)
-		{
-			prevZero++;
-			results[pepIdx].ICs[fileIdx].intensity[i] = 0.0;
-		}
-		if (prevZero > 2)
-		{
-			results[pepIdx].ICs[fileIdx].intensity[i] = 0.0;
-		}
-	}*/
-	SearchAPeptide(rawData, pepIdx, fileIdx, true);
-	CalcPeptideMassCenter(pepIdx, fileIdx);
-	CalcDeuteration(pepIdx, fileIdx);
-
-	fclose(stdout);
-	return false;
-}
-
 double TPeptideStore::CreateAverageIsoPattern(int pepIdx, int fileIdx, int sScan, int eScan, int maxPos, int maxPepD, double* Mass, double** Y)
 {
 	//create average spectra for isotopic pattern comparison
@@ -444,8 +403,9 @@ double TPeptideStore::CreateAverageIsoPattern(int pepIdx, int fileIdx, int sScan
 		//std::cout << Mass[i] / peptides[pepIdx].z + masses::Hp << "\t";
 		resultIsotopeDistrib = 0.0;
 		int isoCounter = 0;
-		for (size_t r = max(0,maxPos - AVGSPECISOTOPENR); r < min(maxPos+ AVGSPECISOTOPENR,eScan) ; r++)
+		//for (size_t r = max(0,maxPos - AVGSPECISOTOPENR); r < min(maxPos+ AVGSPECISOTOPENR,eScan) ; r++)
 			//ToDo: create average of spectra
+		for (size_t r = max(0, maxPos); r < min(maxPos + AVGSPECISOTOPENR, eScan); r++)
 		{
 			if (Y[i][r] > ISOTOPE_CENTROID_TOP * Y[i][maxPos])
 			{
@@ -774,8 +734,9 @@ inline int TPeptideStore::CheckIsotopeOverlap(int pepIdx, int start, int end, in
 	SAFE_DELETE(sg);
 
 	double rtDelta = 10; //difference that we count as 0
-								   // make it dependent on the width of the current chromatographic peak
-								   //find the first isotope that is not 0 intensity and find its highest peak???
+	//10 is 3s for average HDMS scans
+					  // make it dependent on the width of the current chromatographic peak
+					  //find the first isotope that is not 0 intensity and find its highest peak???
 	//WRITE_INFO(refIdx);
 	//peptides[pepIdx].composition.maxIdx
 	//std::cout << start <<"__" << maxIntLoc << std::endl;

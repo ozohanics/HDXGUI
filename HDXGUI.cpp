@@ -181,7 +181,7 @@ bool ShowSpectrumPlotWithRef(std::string title, float* x1, float* y1, float* x2,
 		centY[3] = 0.0;
 
 		ImPlot::PlotShaded("center", centX, centY, 4);
-
+		
 		auto mousePos = ImPlot::GetPlotMousePos(IMPLOT_AUTO, IMPLOT_AUTO);
 		currentUIMsg.xCoord = mousePos.x;
 		currentUIMsg.yCoord = mousePos.y;
@@ -236,25 +236,6 @@ bool ShowChromatogram(HDXMain &HDXApp, int item_current_idx, int file_list_idx)
 	return myMouse;
 }
 
-
-//x1,y1 - isotopes, x2, y2 - reference, center is loaded separately
-bool ShowRAWSpectrum(std::string title, float* x1, float* y1, int size1)
-{
-	bool isMouseInside = false;
-	if (ImPlot::BeginPlot(title.c_str(), ImVec2(-1, -1))) {
-		ImPlot::SetNextLineStyle(ImVec4(0, 0, 0, -1), 2);
-		ImPlot::SetupAxes("mz", "Intensity", ImPlotAxisFlags_AutoFit, ImPlotAxisFlags_AutoFit);
-		ImPlot::SetupLegend(ImPlotLocation_NorthEast, ImPlotLegendFlags_None);
-		ImPlot::SetNextMarkerStyle(ImPlotMarker_Circle, 3);
-
-		//ImPlot::SetupFinish();
-		//plot current isotopes
-		if (size1 > 0) ImPlot::PlotLine(title.c_str(), x1, y1, size1);
-		
-		ImPlot::EndPlot();
-	}
-	return isMouseInside;
-}
 
 void ShowMouseSetupPanel(bool* showMe)
 {
@@ -427,7 +408,6 @@ bool ModellAA()
 
 static float xs1[1001], ys1[1001]; //spectra
 static float xs2[1001], ys2[1001]; //reference
-static float xs3[1001], ys3[1001]; //raw data
 
 int FillSpectrumArray(int item_current_idx, int file_list_idx)
 {
@@ -523,50 +503,6 @@ int FillIsoRefArray(int item_current_idx, int refIdx , int ys1Count)
 		}
 	}
 	return refCounter;
-}
-
-
-int FillRAWSpectrumArray(int item_current_idx, int file_list_idx, double window)
-{
-	int arrCounter = 0;
-	
-	if (HDXApp.last_file_idx != file_list_idx)
-	{
-		HDXApp.last_file_idx = file_list_idx;
-		HDXApp.rawData->XMLToMemory(HDXApp.peptideStore->dataInfo[file_list_idx].rawPath);
-	}
-	double curr_mass = HDXApp.peptideStore->peptides[item_current_idx].mass / HDXApp.peptideStore->peptides[item_current_idx].z + masses::Hp;
-	long   curr_scan = window; //HDXApp.peptideStore->peptides[item_current_idx].maxIntLoc + 
-	//find index of mass in current scan, used for extracting a part of the spectrum 
-	long current_scan__low_idx = HDXApp.rawData->BinarySearchClosestSpectrumIndex(curr_scan, curr_mass, 0.25) - 5; 
-	long current_scan__high_idx = current_scan__low_idx + 17;
-		//HDXApp.rawData->BinarySearchClosestSpectrumIndex(curr_scan, curr_mass + 30, 0.25);
-
-	for (int c = current_scan__low_idx; c < current_scan__high_idx; c++)
-	{
-		if (c == current_scan__low_idx)
-		{
-			xs3[arrCounter] = HDXApp.rawData->GetFileDataMZArray(curr_scan)[c] - 0.5;
-			ys3[arrCounter] = 0;
-			arrCounter++;
-		}
-		xs3[arrCounter] = HDXApp.rawData->GetFileDataMZArray(curr_scan)[c];
-		ys3[arrCounter] = 0;
-		arrCounter++;
-		xs3[arrCounter] = HDXApp.rawData->GetFileDataMZArray(curr_scan)[c];
-		ys3[arrCounter] = HDXApp.rawData->GetFileDataYArray(curr_scan)[c];
-		arrCounter++;
-		xs3[arrCounter] = HDXApp.rawData->GetFileDataMZArray(curr_scan)[c];
-		ys3[arrCounter] = 0;
-		arrCounter++;
-		if (c == current_scan__high_idx - 1)
-		{
-			xs3[arrCounter] = HDXApp.rawData->GetFileDataMZArray(curr_scan)[c] + 0.5;
-			ys3[arrCounter] = 0;
-			arrCounter++;
-		}
-	}
-	return arrCounter;
 }
 
 
@@ -693,7 +629,7 @@ int main(int, char**)
 
 	// Our state
 	bool show_mouse_window = false;
-	bool show_another_window = false;
+	bool show_param_window = false;
 	bool useOverlap = true; //used for isotope extracted chromatogram overlap check
 
 	ImVec4 clear_color = ImVec4(0.145f, 0.55f, 0.60f, 0.70f);
@@ -710,11 +646,11 @@ int main(int, char**)
 	static int item_current_idx = 0; // Here we store our selection data as an index.
 	static int file_list_idx = 0; // Here we store our selection data as an index.
 	static double refError = 0.25;
+	static double ppmError = 5.0;
 	static double deutProtLimit = -0.05;
 	static double retTimeWindow = 0.25;
 	static double rawScanWindow = 1;
 	static bool useIsoMax = true; //use isotope data instead of scan basepeak
-	int rawCounter = ERROR_VALUE;
 
 	while (!done)
 	{
@@ -773,7 +709,7 @@ int main(int, char**)
 
 			//Control Panel
 			ImGui::Begin("Control Panel");
-			ImGui::Checkbox("Show Parameter Window", &show_another_window); ImGui::SameLine();
+			ImGui::Checkbox("Show Parameter Window", &show_param_window); ImGui::SameLine();
 			ImGui::Checkbox("Show Mouse Settings", &show_mouse_window); ImGui::SameLine();
 			//ImGui::Checkbox("Use isotopes for XIC", &useIsoMax); ImGui::SameLine();
 			ImGui::Checkbox("Use isotopes overlap", &useOverlap); ImGui::SameLine();
@@ -822,7 +758,7 @@ int main(int, char**)
 
 			}
 			ImGui::NewLine();
-			ImGui::PushItemWidth(450);
+			ImGui::PushItemWidth(550);
 
 			const char* combo_preview_value = peptideNames[item_current_idx].c_str();  // Pass in the preview value visible before opening the combo (it could be anything)
 			if (ImGui::BeginCombo("Peptide List", combo_preview_value))//,ImVec2(0, 15 * ImGui::GetTextLineHeightWithSpacing())
@@ -878,9 +814,7 @@ int main(int, char**)
 
 				double center = ((HDXApp.peptideStore->results[item_current_idx].deutResults[file_list_idx].massCenter) / HDXApp.peptideStore->peptides[item_current_idx].z + masses::Hp);
 				double refcenter = ((HDXApp.peptideStore->results[item_current_idx].isoRefData.massCenter) / HDXApp.peptideStore->peptides[item_current_idx].z + masses::Hp);
-				//store a raw spectrum
-				rawCounter = FillRAWSpectrumArray(item_current_idx, file_list_idx, rawScanWindow);
-
+				
 				//Plot
 				ImGui::Begin("Spectra Panel");
 				ImGui::BulletText("See the plot's context menu for setting. \n Spectrum: Double left click for XIC, 	double middle to remove isotope. \n Double middle click inside chromatogram to set window");
@@ -1025,10 +959,10 @@ int main(int, char**)
 
 		}//frame ending
 
-		// 3. Show another simple window.
-		if (show_another_window)
+		// 3. Show parameter window window.
+		if (show_param_window)
 		{
-			ImGui::Begin("Parameter Window", &show_another_window);   // Pass a pointer to our bool variable (the window will have a closing button that will clear the bool when clicked)
+			ImGui::Begin("Parameter Window", &show_param_window);   // Pass a pointer to our bool variable (the window will have a closing button that will clear the bool when clicked)
 			ImGui::Text("Please set correct parameters");
 			ImGui::NewLine();
 			if (ImGui::Button("Open Raw File List")) // open Dialog Simple
@@ -1036,6 +970,9 @@ int main(int, char**)
 			strcpy(rawPath, rawStr.c_str());
 			strcpy(pepPath, pepStr.c_str());
 			ImGui::PushItemWidth(250);
+			//ImGui::Spacing();
+			//ImGui::Dummy(ImVec2(0.0f, 20.0f));
+			
 			ImGui::InputText("Raw file list path", rawPath, IM_ARRAYSIZE(rawPath));
 			ImGui::NewLine();
 			if (ImGui::Button("Open Peptide List File")) // open Dialog Simple
@@ -1043,31 +980,21 @@ int main(int, char**)
 			DisplayFileDialog(rawStr, "RawKey");
 			DisplayFileDialog(pepStr, "PepKey");
 			ImGui::InputText("Peptide file list path", pepPath, IM_ARRAYSIZE(pepPath));
-			ImGui::PopItemWidth();
-			ImGui::NewLine();
-			ImGui::PushItemWidth(50);
+			//ImGui::PopItemWidth();
+			//ImGui::NewLine();
+			ImGui::PushItemWidth(60);
 			
-			ImGui::InputDouble("Set Reference Max Error", &refError, 0.0,0.0,"%.2f",ImGuiInputTextFlags_EnterReturnsTrue);
+			ImGui::InputDouble("Set Reference Max Error", &refError, 0.0, 0.0, "%.2f", ImGuiInputTextFlags_EnterReturnsTrue); ImGui::SameLine();
+			ImGui::InputDouble("Set Experimental PPM Error", &ppmError, 0.0, 0.0, "%.2f", ImGuiInputTextFlags_EnterReturnsTrue);
+			HDXApp.SetPPMError(ppmError);
 			
-			ImGui::InputDouble("Set Deuteration Min Limit", &deutProtLimit, 0.0, 0.0, "%.2f", ImGuiInputTextFlags_EnterReturnsTrue);
+			ImGui::InputDouble("Set Deuteration Min Limit", &deutProtLimit, 0.0, 0.0, "%.2f", ImGuiInputTextFlags_EnterReturnsTrue); ImGui::SameLine();
 				//Text("", pepPath, IM_ARRAYSIZE(pepPath));
-			ImGui::NewLine();
+			//ImGui::NewLine();
 			
 			ImGui::InputDouble("Set XIC Window", &retTimeWindow, 0.0, 0.0, "%.2f", ImGuiInputTextFlags_EnterReturnsTrue);
 			//Text("", pepPath, IM_ARRAYSIZE(pepPath));
-			ImGui::NewLine();
-			ImGui::InputDouble("Set RAW Window", &rawScanWindow, 0.0, 0.0, "%.2f", ImGuiInputTextFlags_EnterReturnsTrue);
-			int rawScanWindowInt = rawScanWindow; ImGui::SameLine();
-			ImGui::PushItemWidth(250);
-			ImGui::SliderInt("RAW spectra", &rawScanWindowInt, 1, HDXApp.rawData->GetSpecNr()-1);
-			rawScanWindow = rawScanWindowInt;
-
-			ImGui::PopItemWidth();
-
-			//ImGui::Begin("Parameter Window", &show_another_window);
-			auto title = HDXApp.rawData->GetFileDataRT(rawScanWindow);
-			ShowRAWSpectrum(to_string(title), xs3, ys3, rawCounter);
-
+			
 
 			ImGui::End();
 			

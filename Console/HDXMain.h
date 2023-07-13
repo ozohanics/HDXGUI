@@ -44,6 +44,9 @@ public:
 		peptideStore = new TPeptideStore;
 		rawData = new TRawDataFile;
 	}
+
+	void SetPPMError(double errorVal) { peptideStore->exp_ppm_error = errorVal; }
+
 	//read a tab delimited text file containing peptide input data, with the format below and no header
 	// 	   Start-End Seqeuence	RTstart	RTend	Charge
 	//35-70	IEKNETLGGTXLNVGXIPSKALLNNSHYYHMAHGKD	9.3622	9.9622	3
