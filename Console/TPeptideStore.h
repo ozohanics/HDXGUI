@@ -215,6 +215,10 @@ public:
 	bool		SetRawInfo(std::string path, double time, int idx, std::string st="", int repl=0);
 	//search the isotopes belonging to a peptide
 	bool		SearchAPeptide(TRawDataFile* rawData, int idx, int fileIdx, bool isDeuterated); //search a file for peptide at index idx
+	void InitializeTempArraysForSearch(long rawSpecNr, double* RT, TRawDataFile* rawData, int maxPepD, double** tempY, long end, long start, bool isDeuterated, int pepIdx, double* tempMass);
+	void StorePeakData(double intensity, double& scanMaxInt, std::vector<double>& maxIntVec, const size_t& idx, std::vector<int>& maxLocVec, const size_t& s);
+	void ModifyWrongIsotope_mass_error_based(double peak_ppm, const double& ppm_upper_limit, double& intensity);
+	void StorePeptideResultTimepoints(int maxPepD, long start, long end, double** tempY, int pepIdx, int fileIdx, double* RT);
 	//log results
 	void		WriteResultsToStdOut();
 
